@@ -43,7 +43,6 @@ class Model(list, Optimizers, Estimators):
     _firstimetouch = True
 
     def __init__(self, spectrum):
-        self.convolved = False
         self.auto_update_plot = False
         self.spectrum = spectrum
         self.axes_manager = self.spectrum.axes_manager
@@ -114,48 +113,6 @@ class Model(list, Optimizers, Estimators):
             for parameter in component.parameters:
                 parameter.connection_active = tof
         self.auto_update_plot = tof
-
-    def generate_cube(self, out_of_range_to_nan = True):
-        """Generate a SI with the current model
-        
-        The SI is stored in self.model_cube
-        """
-        pbar = progressbar.progressbar(
-        maxval = (np.cumprod(self.axes_manager.navigation_shape)[-1]))
-        i = 0
-        for index in np.ndindex(tuple(self.axes_manager.navigation_shape)):
-            self.axes_manager.set_not_slicing_indexes(index)
-            self.charge(only_fixed = False)
-            self.model_cube[self.axes_manager._getitem_tuple][
-            self.channel_switches] = self.__call__(
-                non_convolved = not self.convolved, onlyactive = True)
-            if out_of_range_to_nan is True:
-                self.model_cube[self.axes_manager._getitem_tuple][
-                self.channel_switches == False] = np.nan
-                self.model_cube[self.channel_switches == False,:,:] = np.nan
-            i += 1
-            pbar.update(i)
-            
-# TODO: port it                    
-#    def generate_chisq(self, degrees_of_freedom = 'auto') :
-#        if self.spectrum.variance is None:
-#            self.spectrum.estimate_variance()
-#        variance = self.spectrum.variance[self.channel_switches]
-#        differences = (self.model_cube - self.spectrum.data)[self.channel_switches]
-#        self.chisq = np.sum(differences**2 / variance, 0)
-#        if degrees_of_freedom == 'auto':
-#            self.red_chisq = self.chisq / \
-#            (np.sum(np.ones(self.spectrum.energydimension)[self.channel_switches]) \
-#            - len(self.p0) -1)
-#            print "Degrees of freedom set to auto"
-#            print "DoF = ", len(self.p0)
-#        elif type(degrees_of_freedom) is int :
-#            self.red_chisq = self.chisq / \
-#            (np.sum(np.ones(self.spectrum.energydimension)[self.channel_switches]) \
-#            - degrees_of_freedom -1)
-#        else:
-#            print "degrees_of_freedom must be on interger type."
-#            print "The red_chisq could not been calculated"
 
     def _set_p0(self):
         p0 = None
@@ -249,30 +206,13 @@ class Model(list, Optimizers, Estimators):
                 counter += component.nfree_param
 
     # Defines the functions for the fitting process -------------------------
-    def _model2plot(self, axes_manager, out_of_range2nans = True):
-        old_axes_manager = None
-        if axes_manager is not self.axes_manager:
-            old_axes_manager = self.axes_manager
-            self.axes_manager = axes_manager
-            self.charge()
-        s = self.__call__(non_convolved=False, onlyactive=True)
-        if old_axes_manager is not None:
-            self.axes_manager = old_axes_manager
-            self.charge()
-        if out_of_range2nans is True:
-            ns = np.zeros((self.axis.axis.shape))
-            ns[:] = np.nan
-            ns[self.channel_switches] = s
-            s = ns
-        return s
     
-    def __call__(self, non_convolved = False, onlyactive = False) :
+    def __call__(self, onlyactive = False) :
         """Returns the corresponding model for the current coordinates
         
         Parameters
         ----------
-        non_convolved : bool
-            If True it will return the deconvolved model
+
         only_active : bool
             If True, only the active components will be used to build the model.
             
@@ -283,243 +223,82 @@ class Model(list, Optimizers, Estimators):
         numpy array
         """
             
-        if self.convolved is False or non_convolved is True:
-            axis = self.axis.axis[self.channel_switches]
-            sum_ = np.zeros(len(axis))
-            if onlyactive is True:
-                for component in self: # Cut the parameters list
-                    if component.active:
-                        np.add(sum_, component.function(axis),
-                        sum_)
-                return sum_
-            else:
-                for component in self: # Cut the parameters list
-                    np.add(sum_, component.function(axis),
-                     sum_)
-                return sum_
-
-        else: # convolved
-            counter = 0
-            sum_convolved = np.zeros(len(self.experiments.convolution_axis))
-            sum_ = np.zeros(len(self.axis.axis))
+        axis = self.axis.axis[self.channel_switches]
+        sum_ = np.zeros(len(axis))
+        if onlyactive is True:
             for component in self: # Cut the parameters list
-                if onlyactive :
-                    if component.active:
-                        if component.convolved:
-                            np.add(sum_convolved,
-                            component.function(
-                            self.experiments.convolution_axis), sum_convolved)
-                        else:
-                            np.add(sum_,
-                            component.function(self.axis.axis), sum_)
-                        counter+=component.nfree_param
-                else :
-                    if component.convolved:
-                        np.add(sum_convolved,
-                        component.function(self.experiments.convolution_axis),
-                        sum_convolved)
-                    else:
-                        np.add(sum_, component.function(self.axis.axis),
-                        sum_)
-                    counter+=component.nfree_param
-            to_return = sum_ + np.convolve(
-                self.ll(self.axes_manager), 
-                sum_convolved, mode="valid")
-            to_return = to_return[self.channel_switches]
-            return to_return
-
-    # TODO: the way it uses the axes
-    def set_data_range_in_pixels(self, i1 = None, i2 = None):
-        """Use only the selected spectral range in the fitting routine.
-        
-        Parameters
-        ----------
-        i1 : Int
-        i2 : Int
-        
-        Notes
-        -----
-        To use the full energy range call the function without arguments.
-        """
-
-        self.backup_channel_switches = copy.copy(self.channel_switches)
-        self.channel_switches[:] = False
-        self.channel_switches[i1:i2] = True
-        if self.auto_update_plot is True:
-            self.update_plot()
-        
-    def set_data_range_in_units(self, x1 = None, x2 = None):
-        """Use only the selected spectral range defined in its own units in the 
-        fitting routine.
-        
-        Parameters
-        ----------
-        E1 : None or float
-        E2 : None or float
-        
-        Notes
-        -----
-        To use the full energy range call the function without arguments.
-        """
-        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
-        self.set_data_range_in_pixels(i1, i2)
-
-    def remove_data_range_in_pixels(self, i1 = None, i2= None):
-        """Removes the data in the given range from the data range that will be 
-        used by the fitting rountine
-        
-        Parameters
-        ----------
-        x1 : None or float
-        x2 : None or float
-        """
-        self.channel_switches[i1:i2] = False
-        if self.auto_update_plot is True:
-            self.update_plot()
-        
-    def remove_data_range_in_units(self, x1 = None, x2= None):
-        """Removes the data in the given range from the data range that will be 
-        used by the fitting rountine
-        
-        Parameters
-        ----------
-        x1 : None or float
-        x2 : None or float
-        
-        """
-        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
-        self.remove_data_range_in_pixels(i1, i2)
-        
-    def add_data_range_in_pixels(self, i1 = None, i2= None):
-        """Adds the data in the given range from the data range that will be 
-        used by the fitting rountine
-        
-        Parameters
-        ----------
-        x1 : None or float
-        x2 : None or float
-        """
-        self.channel_switches[i1:i2] = True
-        if self.auto_update_plot is True:
-            self.update_plot()
-        
-    def add_data_range_in_units(self, x1 = None, x2= None):
-        """Adds the data in the given range from the data range that will be 
-        used by the fitting rountine
-        
-        Parameters
-        ----------
-        x1 : None or float
-        x2 : None or float
-        
-        """
-        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
-        self.add_data_range_in_pixels(i1, i2)
-        
-    def reset_the_data_range(self):
-        self.channel_switches[:] = True
-        if self.auto_update_plot is True:
-            self.update_plot()
+                if component.active:
+                    np.add(sum_, component.function(axis),
+                    sum_)
+            return sum_
+        else:
+            for component in self: # Cut the parameters list
+                np.add(sum_, component.function(axis),
+                 sum_)
+            return sum_
 
     def _model_function(self,param):
+        '''
+        '''
 
-        if self.convolved is True:
-            counter = 0
-            sum_convolved = np.zeros(len(self.experiments.convolution_axis))
-            sum = np.zeros(len(self.axis.axis))
-            for component in self: # Cut the parameters list
-                if component.active is True:
-                    if component.convolved is True:
-                        np.add(sum_convolved, component(param[\
-                        counter:counter+component.nfree_param],
-                        self.experiments.convolution_axis), sum_convolved)
-                    else:
-                        np.add(sum, component(param[counter:counter + \
-                        component.nfree_param], self.axis.axis), sum)
-                    counter+=component.nfree_param
+        axis = self.axis.axis[self.channel_switches]
+        counter = 0
+        first = True
+        for component in self: # Cut the parameters list
+            if component.active is True:
+                if first is True:
+                    sum = component(param[counter:counter + \
+                    component.nfree_param],axis)
+                    first = False
+                else:
+                    sum += component(param[counter:counter + \
+                    component.nfree_param], axis)
+                counter += component.nfree_param
+        return sum
 
-            return (sum + np.convolve(self.ll(self.axes_manager), 
-                                      sum_convolved,mode="valid"))[
-                                      self.channel_switches]
-
+    def _jacobian(self, param, y, weights = None):
+        axis = self.axis.axis[self.channel_switches]
+        counter = 0
+        grad = axis
+        for component in self: # Cut the parameters list
+            if component.active:
+                component.charge(param[counter:counter + \
+                component.nfree_param] , onlyfree = True)
+                for parameter in component.free_parameters :
+                    par_grad = parameter.grad(axis)
+                    if parameter._twins:
+                        for parameter in parameter._twins:
+                            np.add(par_grad, parameter.grad(
+                            axis), par_grad)
+                    grad = np.vstack((grad, par_grad))
+                counter += component.nfree_param
+        if weights is None:
+            return grad[1:,:]
         else:
-            axis = self.axis.axis[self.channel_switches]
-            counter = 0
-            first = True
-            for component in self: # Cut the parameters list
-                if component.active is True:
-                    if first is True:
-                        sum = component(param[counter:counter + \
-                        component.nfree_param],axis)
-                        first = False
-                    else:
-                        sum += component(param[counter:counter + \
-                        component.nfree_param], axis)
-                    counter += component.nfree_param
-            return sum
-
-    def _jacobian(self,param, y, weights = None):
-        if self.convolved is True:
-            counter = 0
-            grad = np.zeros(len(self.axis.axis))
-            for component in self: # Cut the parameters list
-                if component.active:
-                    component.charge(param[counter:counter + \
-                    component.nfree_param] , onlyfree = True)
-                    if component.convolved:
-                        for parameter in component.free_parameters :
-                            par_grad = np.convolve(
-                            parameter.grad(self.experiments.convolution_axis), 
-                            self.ll(self.axes_manager), 
-                            mode="valid")
-                            if parameter._twins:
-                                for parameter in parameter._twins:
-                                    np.add(par_grad, np.convolve(
-                                    parameter.grad(
-                                    self.experiments.convolution_axis), 
-                                    self.ll(self.axes_manager), 
-                                    mode="valid"), par_grad)
-                            grad = np.vstack((grad, par_grad))
-                        counter += component.nfree_param
-                    else:
-                        for parameter in component.free_parameters :
-                            par_grad = parameter.grad(self.axis.axis)
-                            if parameter._twins:
-                                for parameter in parameter._twins:
-                                    np.add(par_grad, parameter.grad(
-                                    self.axis.axis), par_grad)
-                            grad = np.vstack((grad, par_grad))
-                        counter += component.nfree_param
-            if weights is None:
-                return grad[1:, self.channel_switches]
-            else:
-                return grad[1:, self.channel_switches] * weights
-        else:
-            axis = self.axis.axis[self.channel_switches]
-            counter = 0
-            grad = axis
-            for component in self: # Cut the parameters list
-                if component.active:
-                    component.charge(param[counter:counter + \
-                    component.nfree_param] , onlyfree = True)
-                    for parameter in component.free_parameters :
-                        par_grad = parameter.grad(axis)
-                        if parameter._twins:
-                            for parameter in parameter._twins:
-                                np.add(par_grad, parameter.grad(
-                                axis), par_grad)
-                        grad = np.vstack((grad, par_grad))
-                    counter += component.nfree_param
-            if weights is None:
-                return grad[1:,:]
-            else:
-                return grad[1:,:] * weights
+            return grad[1:,:] * weights
         
     def _function4odr(self,param,x):
         return self._model_function(param)
     
     def _jacobian4odr(self,param,x):
         return self._jacobian(param, x)
+        
+    def _model2plot(self, axes_manager, out_of_range2nans = True):
+        old_axes_manager = None
+        if axes_manager is not self.axes_manager:
+            old_axes_manager = self.axes_manager
+            self.axes_manager = axes_manager
+            self.charge()
+        s = self.__call__(onlyactive = True)
+        if old_axes_manager is not None:
+            self.axes_manager = old_axes_manager
+            self.charge()
+        if out_of_range2nans is True:
+            ns = np.zeros((self.axis.axis.shape))
+            ns[:] = np.nan
+            ns[self.channel_switches] = s
+            s = ns
+        return s
                 
     def multifit(self, mask = None, fitter = "leastsq", 
                  charge_only_fixed = False, grad = False, autosave = False, 
@@ -623,6 +402,98 @@ class Model(list, Optimizers, Estimators):
             for parameter in comp.parameters:
                 parameter.set_current_value_to(mask = mask)
                 
+    def set_data_range_in_pixels(self, i1 = None, i2 = None):
+        """Use only the selected spectral range in the fitting routine.
+        
+        Parameters
+        ----------
+        i1 : Int
+        i2 : Int
+        
+        Notes
+        -----
+        To use the full energy range call the function without arguments.
+        """
+
+        self.backup_channel_switches = copy.copy(self.channel_switches)
+        self.channel_switches[:] = False
+        self.channel_switches[i1:i2] = True
+        if self.auto_update_plot is True:
+            self.update_plot()
+        
+    def set_data_range_in_units(self, x1 = None, x2 = None):
+        """Use only the selected spectral range defined in its own units in the 
+        fitting routine.
+        
+        Parameters
+        ----------
+        E1 : None or float
+        E2 : None or float
+        
+        Notes
+        -----
+        To use the full energy range call the function without arguments.
+        """
+        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
+        self.set_data_range_in_pixels(i1, i2)
+
+    def remove_data_range_in_pixels(self, i1 = None, i2= None):
+        """Removes the data in the given range from the data range that will be 
+        used by the fitting rountine
+        
+        Parameters
+        ----------
+        x1 : None or float
+        x2 : None or float
+        """
+        self.channel_switches[i1:i2] = False
+        if self.auto_update_plot is True:
+            self.update_plot()
+        
+    def remove_data_range_in_units(self, x1 = None, x2= None):
+        """Removes the data in the given range from the data range that will be 
+        used by the fitting rountine
+        
+        Parameters
+        ----------
+        x1 : None or float
+        x2 : None or float
+        
+        """
+        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
+        self.remove_data_range_in_pixels(i1, i2)
+        
+    def add_data_range_in_pixels(self, i1 = None, i2= None):
+        """Adds the data in the given range from the data range that will be 
+        used by the fitting rountine
+        
+        Parameters
+        ----------
+        x1 : None or float
+        x2 : None or float
+        """
+        self.channel_switches[i1:i2] = True
+        if self.auto_update_plot is True:
+            self.update_plot()
+        
+    def add_data_range_in_units(self, x1 = None, x2= None):
+        """Adds the data in the given range from the data range that will be 
+        used by the fitting rountine
+        
+        Parameters
+        ----------
+        x1 : None or float
+        x2 : None or float
+        
+        """
+        i1, i2 = self.axis.value2index(x1), self.axis.value2index(x2)
+        self.add_data_range_in_pixels(i1, i2)
+        
+    def reset_the_data_range(self):
+        self.channel_switches[:] = True
+        if self.auto_update_plot is True:
+            self.update_plot()
+                
     def _enable_ext_bounding(self,components = None):
         """
         """
@@ -639,3 +510,44 @@ class Model(list, Optimizers, Estimators):
         for component in components:
             for parameter in component.parameters:
                 parameter.ext_bounded = False
+                
+    def generate_cube(self, out_of_range_to_nan = True):
+        """Generate a SI with the current model
+        
+        The SI is stored in self.model_cube
+        """
+        pbar = progressbar.progressbar(
+        maxval = (np.cumprod(self.axes_manager.navigation_shape)[-1]))
+        i = 0
+        for index in np.ndindex(tuple(self.axes_manager.navigation_shape)):
+            self.axes_manager.set_not_slicing_indexes(index)
+            self.charge(only_fixed = False)
+            self.model_cube[self.axes_manager._getitem_tuple][
+            self.channel_switches] = self.__call__(onlyactive = True)
+            if out_of_range_to_nan is True:
+                self.model_cube[self.axes_manager._getitem_tuple][
+                self.channel_switches == False] = np.nan
+                self.model_cube[self.channel_switches == False,:,:] = np.nan
+            i += 1
+            pbar.update(i)
+            
+# TODO: port it                    
+#    def generate_chisq(self, degrees_of_freedom = 'auto') :
+#        if self.spectrum.variance is None:
+#            self.spectrum.estimate_variance()
+#        variance = self.spectrum.variance[self.channel_switches]
+#        differences = (self.model_cube - self.spectrum.data)[self.channel_switches]
+#        self.chisq = np.sum(differences**2 / variance, 0)
+#        if degrees_of_freedom == 'auto':
+#            self.red_chisq = self.chisq / \
+#            (np.sum(np.ones(self.spectrum.energydimension)[self.channel_switches]) \
+#            - len(self.p0) -1)
+#            print "Degrees of freedom set to auto"
+#            print "DoF = ", len(self.p0)
+#        elif type(degrees_of_freedom) is int :
+#            self.red_chisq = self.chisq / \
+#            (np.sum(np.ones(self.spectrum.energydimension)[self.channel_switches]) \
+#            - degrees_of_freedom -1)
+#        else:
+#            print "degrees_of_freedom must be on interger type."
+#            print "The red_chisq could not been calculated"
