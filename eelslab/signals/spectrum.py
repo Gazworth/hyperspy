@@ -27,9 +27,9 @@ import numpy as np
 import scipy as sp
 
 from eelslab.signal import Signal
-from eelslab.misc import progressbar
-from eelslab.misc import utils
-from eelslab.misc import utils_varia
+from eelslab import progressbar
+from eelslab import utils
+from eelslab import utils_varia
 
 class Spectrum(Signal):
     """
@@ -474,7 +474,7 @@ class Spectrum(Signal):
     def to_image(self):
         from eelslab.signals.image import Image
         dic = self._get_signal_dict()
-        dic['mapped_parameters']['record_by'] = 'image'
+        dic['mapped_parameters']['data_type'] = 'Image'
         dic['data'] = np.swapaxes(dic['data'], 0, -1)
         utils_varia.swapelem(dic['axes'],0,-1)
         dic['axes'][0]['index_in_array'] = 0
@@ -482,7 +482,7 @@ class Spectrum(Signal):
         return Image(dic)
         
     def to_EELS(self):
-        from eelslab.signals.eels import EELSSpectrum
+        from eelslab.signals.eels import EELSSignal
         dic = self._get_signal_dict()
-        return EELSSpectrum(dic)
+        return EELSSignal(dic)
         
